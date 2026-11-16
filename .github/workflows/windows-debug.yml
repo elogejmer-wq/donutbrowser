@@ -1,0 +1,89 @@
+name: Build Windows Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-debug:
+    name: Build Windows Debug (E2E Test Features)
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: "pnpm"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          key: windows-debug-e2e
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Prepare sidecar binaries
+        run: pnpm copy-proxy-binary
+
+      - name: Build Windows Debug Binary with E2E Feature
+        working-directory: ./src-tauri
+        run: |
+          cargo build --features e2e
+
+      - name: Package Windows Debug Artifact
+        shell: bash
+        run: |
+          PORTABLE_DIR="Donut-Debug-Win64"
+          mkdir -p "$PORTABLE_DIR"
+
+          cp "src-tauri/target/debug/donutbrowser.exe" "$PORTABLE_DIR/Donut.exe"
+
+          if [ -f "src-tauri/target/debug/donut-proxy.exe" ]; then
+            cp "src-tauri/target/debug/donut-proxy.exe" "$PORTABLE_DIR/"
+          fi
+
+          if [ -f "src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe" ]; then
+            cp "src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe" "$PORTABLE_DIR/xray.exe"
+          fi
+
+          if [ -f "src-tauri/target/debug/WebView2Loader.dll" ]; then
+            cp "src-tauri/target/debug/WebView2Loader.dll" "$PORTABLE_DIR/"
+          fi
+
+          touch "$PORTABLE_DIR/.portable"
+
+          cat << 'EOF' > "$PORTABLE_DIR/run-debug.bat"
+          @echo off
+          set TAURI_AUTOMATION=1
+          set WAYFERN_TEST_TOKEN=test
+          set DONUT_E2E_AGENT_ENGINE=mock
+          start "" "%~dp0Donut.exe"
+          EOF
+
+          7z a "Donut-Debug-Win64.zip" "$PORTABLE_DIR"
+
+      - name: Upload Debug Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Donut-Debug-Win64
+          path: Donut-Debug-Win64.zip
+          retention-days: 7
